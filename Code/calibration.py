@@ -135,7 +135,7 @@ class LiDAR2Camera(object):
         """
         
         if print_info:
-            print("\Converting 3D Camera Points to 2D Image Pixels ...")
+            print("\nConverting 3D Camera Points to 2D Image Pixels ...")
 
         # Convert the 3D point to homogeneous coordinates
         pt_3d_homo = np.hstack((pt_3d_camera, 1))
@@ -185,6 +185,27 @@ class LiDAR2Camera(object):
         return pts_3d_velo_list
     
 
+
+
+class LiDAR2CameraLive(LiDAR2Camera):
+    """Calibration object for live ROS data using camera intrinsics and a LiDAR-to-camera transform."""
+
+    def __init__(self, camera_matrix, lidar_to_camera_matrix, rectification_matrix=None):
+        camera_matrix = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+        lidar_to_camera_matrix = np.asarray(lidar_to_camera_matrix, dtype=np.float64)
+
+        if lidar_to_camera_matrix.shape == (4, 4):
+            self.V2C = lidar_to_camera_matrix[:3, :4]
+        elif lidar_to_camera_matrix.shape == (3, 4):
+            self.V2C = lidar_to_camera_matrix
+        else:
+            raise ValueError("lidar_to_camera_matrix must have shape (4, 4) or (3, 4)")
+
+        self.P = np.hstack((camera_matrix, np.zeros((3, 1), dtype=np.float64)))
+        if rectification_matrix is None:
+            self.R0 = np.eye(3, dtype=np.float64)
+        else:
+            self.R0 = np.asarray(rectification_matrix, dtype=np.float64).reshape(3, 3)
 
 
 class LiDAR2Camera_KITTI_raw_data(object):

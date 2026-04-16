@@ -1,0 +1,29 @@
+FROM ros2_camera_lidar_fusion:functional
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DISTRO=humble
+
+SHELL ["/bin/bash", "-lc"]
+
+WORKDIR /app
+
+RUN python3 -m pip install --no-cache-dir virtualenv && \
+    python3 -m virtualenv --system-site-packages /app/venv
+COPY requirements.txt /app/requirements.txt
+RUN . /app/venv/bin/activate && \
+    pip install --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt
+
+COPY docker/run_live_ros.sh /usr/local/bin/yolo_live_ros.sh
+RUN chmod +x /usr/local/bin/yolo_live_ros.sh
+
+ENV PATH="/app/venv/bin:${PATH}"
+
+RUN printf '%s\n' \
+    'source /opt/ros/humble/setup.bash' \
+    '[ -f /app/venv/bin/activate ] && source /app/venv/bin/activate' \
+    >> /root/.bashrc
+
+WORKDIR /app/YOLO-LiDAR-Fusion
+
+CMD ["/bin/bash"]

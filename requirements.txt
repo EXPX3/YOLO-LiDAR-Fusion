@@ -1,7 +1,8 @@
-numpy
+numpy<2
 opencv-python
 scikit-learn
 open3d
 ultralytics
 lapx
 matplotlib
+PyYAML

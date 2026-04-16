@@ -46,10 +46,14 @@ Follow the steps below to set up the environment:
     pip install -r requirements.txt
     ```
 
+5. For live ROS processing, run the code in an environment that already has ROS 2 Humble Python packages available (`rclpy`, `sensor_msgs`, `cv_bridge`) in addition to the Python requirements above.
+
+   _Note:_ The lightweight Docker image in `docker/` is enough for KITTI-style offline inference, but live ROS topic processing needs a ROS-enabled runtime.
+
 ## 4. Usage
 Follow the steps below to use the model:
 
-_Note:_ Make sure that the file structure is as stated below in [File Structure](#6-file-structure). 
+_Note:_ Make sure that the file structure is as stated below in [File Structure](#7-file-structure). 
 
 1. Go to the directory where the implementation is located:
 
@@ -75,6 +79,7 @@ _Note:_ Make sure that the file structure is as stated below in [File Structure]
       - 'random' for multiple random images
       - 'evaluation' to process the complete dataset
       - 'video' to process raw data and create a processed video
+      - 'ros' to process live ROS image and LiDAR topics
     
    - **--mode**:
       - detect (model only detects objects) (default)
@@ -92,6 +97,16 @@ _Note:_ Make sure that the file structure is as stated below in [File Structure]
   
    - **--output-path**: specifies the relative path where the output should be saved
 
+- If _image_index_ is set to 'ros', the following optional parameters can be specified:
+   - **--fusion-config-path**: path to the `vlp16zed2ifusion` config file used to load the default live topics and LiDAR-to-camera extrinsic defaults
+   - **--camera-calibration-file**: optional camera calibration YAML file; if omitted, the model uses the live `CameraInfo` topic for intrinsics
+   - **--image-topic**: override the live camera image topic
+   - **--camera-info-topic**: override the live camera info topic
+   - **--lidar-topic**: override the live LiDAR topic
+   - **--output-topic**: publish the masked projected image to a ROS topic (default: `/yolo_lidar_fusion/masked_projected_image`)
+   - **--max-cloud-age**: maximum allowed timestamp difference between the image and LiDAR messages
+   - **--no-display**: disable the OpenCV display window
+
 - If _image_index_ is a 6-digit number between '000000' and '007517':
     - if **--output-path** is not specified: processed image will only be displayed
     - if **--output-path** is specified: processed image will be stored in the directory passed as a parameter
@@ -101,6 +116,25 @@ _Note:_ Make sure that the file structure is as stated below in [File Structure]
   
 - If _image_index_ is set to 'video', the following parameter has to be specified:
    - **--video-dir**: specifies the relative path of the directory that contains the ordered frames of the video that the model should process (default: '../KITTI_raw_data')
+
+### Live ROS Mode
+The repository now supports a live ROS path through `python main.py ros`. In this mode:
+
+- YOLO runs on the camera image topic
+- the LiDAR point cloud is read from a live `PointCloud2` topic
+- the camera intrinsics come from the live `CameraInfo` topic by default
+- the default image topic, camera info topic, LiDAR topic, and extrinsic defaults are loaded from:
+
+  `/media/gvb/ssd24ubuntu/robotspace2/3DRecon/ws_vlp16zed2ifusion/src/vlp16zed2ifusion/config/fusion_overlay_params.yaml`
+
+- only the LiDAR points that survive the segmentation-mask filtering are projected back onto the image
+
+The default live topics are:
+
+- image: `/zed/zed_node/rgb/color/rect/image`
+- camera info: `/zed/zed_node/rgb/color/rect/camera_info`
+- LiDAR: `/velodyne_points`
+- output image: `/yolo_lidar_fusion/masked_projected_image`
 
 ## 5. Usage Examples:
 - Display the detection results of image '000010' from the KITTI dataset with an erosion factor of 15 and a depth factor of 30:
@@ -117,9 +151,74 @@ _Note:_ Make sure that the file structure is as stated below in [File Structure]
 
 - Process 5 random images from the 'KITTI_dataset' directory (default) by using an erosion factor of 15, a depth factor of 20 and the smallest YOLOv8 model size (n). The detection results are stored in the default output directory './Model_Output':
 
-      python main.py random --image-amount 5 --depth 20 --erosion 15 -model-size n
-  
-## 6. File Structure
+      python main.py random --image-amount 5 --depth 20 --erosion 15 --model-size n
+
+- Run the live ROS pipeline with the default topics loaded from `vlp16zed2ifusion`:
+
+      cd Code
+      source /opt/ros/humble/setup.bash
+      python main.py ros
+
+- Run the live ROS pipeline while explicitly overriding the topics:
+
+      python main.py ros --image-topic /zed/zed_node/rgb/color/rect/image --camera-info-topic /zed/zed_node/rgb/color/rect/camera_info --lidar-topic /velodyne_points --output-topic /yolo_lidar_fusion/masked_projected_image
+
+## 6. Live ROS With ws_vlp16zed2ifusion
+If the ZED and Velodyne topics are already being published from the other workspace at:
+
+`/media/gvb/ssd24ubuntu/robotspace2/3DRecon/ws_vlp16zed2ifusion/docker/run_functional.sh`
+
+then this repository can subscribe to those topics from a second container or terminal session as long as:
+
+- both containers use `--network host`
+- both containers use the same `ROS_DOMAIN_ID`
+- `ROS_LOCALHOST_ONLY` is not preventing DDS discovery across the containers
+- the YOLO environment contains ROS 2 Humble Python packages and OpenCV
+
+Recommended launch order:
+
+1. Start the ZED + Velodyne publisher container first.
+2. Wait until `/zed/zed_node/rgb/color/rect/image`, `/zed/zed_node/rgb/color/rect/camera_info`, and `/velodyne_points` are available.
+3. Start the YOLO-LiDAR-Fusion container or shell and run `python main.py ros`.
+
+Creating a Docker Compose file at:
+
+`/media/gvb/ssd24ubuntu/robotspace2/3DRecon`
+
+does make sense if both workspaces are meant to run together regularly. It gives you:
+
+- one shared place to define `--network host`, GPU access, X11 mounts, and environment variables
+- repeatable startup for both containers
+- a cleaner way to keep both workspaces mounted and versioned together
+
+Compose is especially useful here because the `ws_vlp16zed2ifusion` container acts as the sensor publisher and this repository acts as the consumer.
+
+In the provided Compose setup, the publisher uses the existing prebuilt image tag:
+
+`ros2_camera_lidar_fusion:functional`
+
+Only the YOLO live ROS image is built from source if it is missing or if you call Compose with `--build`.
+
+The repository root-level Compose file is:
+
+`/media/gvb/ssd24ubuntu/robotspace2/3DRecon/docker-compose.yml`
+
+Typical startup:
+
+```shell
+xhost +local:root
+cd /media/gvb/ssd24ubuntu/robotspace2/3DRecon
+docker compose up --build
+```
+
+If you want to run the stack without the YOLO OpenCV display window:
+
+```shell
+cd /media/gvb/ssd24ubuntu/robotspace2/3DRecon
+YOLO_DISPLAY=0 docker compose up --build
+```
+
+## 7. File Structure
 The file structure is important to use the model without modifying the dataset paths in the main.py file. It should be as follows:
 
 _Notes:_ 
@@ -170,4 +269,14 @@ The **KITTI_raw_data** directory contains raw data of consecutive frames (for vi
     │       ├── data
     │       │   └── ...
     │       └── timestamps.txt
-    └── requirements.py
+    └── requirements.txt
+
+
+Notes created during testing this repo:
+Requirments:
+   ubuntu/python:3.10-22.04_stable
+   - The point cloud however is filtered by a function such that only the points which
+lie inside the field of view of the image are kept, while all the others discarded
+   - First, the image boundaries are defined, and then the
+3D LiDAR points are converted into 2D image coordinates by a function that uses the
+calibration matrices between the LiDAR and camera sensors

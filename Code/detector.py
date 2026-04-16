@@ -11,6 +11,17 @@ class YOLOv8Detector:
         self.pca = PCA
         self.last_ground_center_of_id = {}    
 
+    def _load_point_cloud_xyz(self, pts):
+        if isinstance(pts, np.ndarray):
+            point_cloud = np.asarray(pts, dtype=np.float32)
+        else:
+            point_cloud = np.fromfile(pts, dtype=np.float32).reshape((-1, 4))
+
+        if point_cloud.ndim != 2 or point_cloud.shape[1] < 3:
+            raise ValueError("Point cloud input must be an array with at least three columns (x, y, z)")
+
+        return np.asarray(point_cloud[:, 0:3], dtype=np.float32)
+
     def process_frame(self, frame, pts, lidar2camera, erosion_factor, depth_factor):
         if self.tracking:
             results = self.model.track(
@@ -35,8 +46,7 @@ class YOLOv8Detector:
         masks = r.masks  # Masks object for segment masks outputs
 
         # Preprocess LiDAR point cloud
-        points = np.fromfile(pts, dtype=np.float32).reshape((-1, 4))[:, 0:3]
-        point_cloud = np.asarray(points)
+        point_cloud = self._load_point_cloud_xyz(pts)
         pts_3D, pts_2D = filter_lidar_points(lidar2camera, point_cloud, (frame.shape[1], frame.shape[0]))
 
         # For each object detected by the YOLOv8 model, fuse and process it
@@ -47,8 +57,6 @@ class YOLOv8Detector:
         for j, cls in enumerate(boxes.cls.tolist()):
             conf = boxes.conf.tolist()[j] if boxes.conf is not None else None
             box_id = int(boxes.id.tolist()[j]) if boxes.id is not None else None
-
-            all_object_IDs.append(box_id)
 
             # Check if the mask is empty before processing
             if masks.xy[j].size == 0:
@@ -63,6 +71,7 @@ class YOLOv8Detector:
 
                 all_corners_3D.append(corners_3D)
                 all_filtered_points_of_object.append(filtered_points_of_object)
+                all_object_IDs.append(box_id)
 
                 # Retrieve the ROS data (e.g. relevant for RoboCar)
                 ROS_type = int(np.int32(cls))
@@ -112,8 +121,7 @@ class YOLOv8Detector:
         masks = r.masks  # Masks object for segment masks outputs
 
         # Preprocess LiDAR point cloud
-        points = np.fromfile(pts, dtype=np.float32).reshape((-1, 4))[:, 0:3]
-        point_cloud = np.asarray(points)
+        point_cloud = self._load_point_cloud_xyz(pts)
         pts_3D, pts_2D = filter_lidar_points(lidar2camera, point_cloud, (frame.shape[1], frame.shape[0]))
 
         # For each object detected by the YOLOv8 model, fuse and process it

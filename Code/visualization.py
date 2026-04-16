@@ -20,6 +20,8 @@ def assign_colors_by_depth(pts_3D):
     max_depth = np.max(pts_3D[:, 0])
     min_depth = np.min(pts_3D[:, 0])
     depth_range = max_depth - min_depth
+    if np.isclose(depth_range, 0.0):
+        return np.repeat(colors[[len(colors) // 2]], pts_3D.shape[0], axis=0)
 
     normalized_depth = (pts_3D[:, 0] - min_depth) / depth_range
     indices = (normalized_depth * (len(colors) - 1)).astype(int)
@@ -445,17 +447,80 @@ def plot_projected_pred_bounding_boxes(lidar2cam, frame, pred_corners_3D, BGR_co
 def draw_projected_3D_points(lidar2cam, frame, FOV_pts_3D, FOV_pts_2D, pts_to_draw_3D):
     """ Draw desired 3D LiDAR points onto the frame specified as input """
 
-    # If there are points in the array
-    if len(pts_to_draw_3D) != 0:
-        # Get color based on depth
-        colors = assign_colors_by_depth(FOV_pts_3D)
-        
-        # Draw only the filtered points
-        pts_to_draw_2D = lidar2cam.convert_3D_to_2D(np.array(pts_to_draw_3D), print_info=False)
+    pts_to_draw_3D = np.asarray(pts_to_draw_3D)
+    if pts_to_draw_3D.size == 0:
+        return
 
-        # Iterate over all 2D points that lie inside the FOV of the camera to get the color of each point correct
-        for i in range(FOV_pts_2D.shape[0]):
-            if FOV_pts_2D[i] in pts_to_draw_2D:
-                color = colors[i]
-                pt = (int(np.round(FOV_pts_2D[i, 0])), int(np.round(FOV_pts_2D[i, 1])))
-                cv2.circle(frame, pt, 2, color=(int(color[0]), int(color[1]), int(color[2])), thickness=-1)
+    pts_to_draw_3D = pts_to_draw_3D.reshape(-1, 3)
+    pts_to_draw_2D = lidar2cam.convert_3D_to_2D(pts_to_draw_3D, print_info=False)
+    colors = assign_colors_by_depth(pts_to_draw_3D)
+
+    height, width = frame.shape[:2]
+    valid_mask = np.isfinite(pts_to_draw_2D).all(axis=1)
+    valid_mask &= (pts_to_draw_2D[:, 0] >= 0) & (pts_to_draw_2D[:, 0] < width)
+    valid_mask &= (pts_to_draw_2D[:, 1] >= 0) & (pts_to_draw_2D[:, 1] < height)
+
+    for pt_2d, color in zip(pts_to_draw_2D[valid_mask], colors[valid_mask]):
+        pt = (int(np.round(pt_2d[0])), int(np.round(pt_2d[1])))
+        cv2.circle(frame, pt, 2, color=(int(color[0]), int(color[1]), int(color[2])), thickness=-1)
+
+
+def annotate_projected_object_distances(lidar2cam, frame, object_points_3D, object_ids=None):
+    """Draw a median LiDAR range label near each detected object's projected point cluster."""
+
+    if object_ids is None:
+        object_ids = []
+
+    height, width = frame.shape[:2]
+
+    for index, object_pts_3D in enumerate(object_points_3D):
+        object_pts_3D = np.asarray(object_pts_3D, dtype=np.float32)
+        if object_pts_3D.size == 0:
+            continue
+
+        object_pts_3D = object_pts_3D.reshape(-1, 3)
+        object_pts_2D = lidar2cam.convert_3D_to_2D(object_pts_3D, print_info=False)
+
+        valid_mask = np.isfinite(object_pts_2D).all(axis=1)
+        valid_mask &= (object_pts_2D[:, 0] >= 0) & (object_pts_2D[:, 0] < width)
+        valid_mask &= (object_pts_2D[:, 1] >= 0) & (object_pts_2D[:, 1] < height)
+
+        if not np.any(valid_mask):
+            continue
+
+        valid_pts_3D = object_pts_3D[valid_mask]
+        valid_pts_2D = object_pts_2D[valid_mask]
+        distances = np.linalg.norm(valid_pts_3D, axis=1)
+        distances = distances[np.isfinite(distances)]
+        if distances.size == 0:
+            continue
+
+        distance_m = float(np.median(distances))
+        anchor_x = int(np.clip(np.min(valid_pts_2D[:, 0]), 0, width - 1))
+        anchor_y = int(np.clip(np.min(valid_pts_2D[:, 1]) - 10, 18, height - 1))
+
+        object_id = object_ids[index] if index < len(object_ids) else None
+        if object_id is None:
+            label = f"{distance_m:.2f} m"
+        else:
+            label = f"ID {object_id} | {distance_m:.2f} m"
+
+        (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        text_origin = (
+            int(np.clip(anchor_x, 0, max(width - text_w - 4, 0))),
+            anchor_y,
+        )
+        box_top_left = (text_origin[0] - 2, text_origin[1] - text_h - 6)
+        box_bottom_right = (text_origin[0] + text_w + 2, text_origin[1] + baseline + 2)
+
+        cv2.rectangle(frame, box_top_left, box_bottom_right, (0, 0, 0), thickness=-1)
+        cv2.putText(
+            frame,
+            label,
+            text_origin,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
