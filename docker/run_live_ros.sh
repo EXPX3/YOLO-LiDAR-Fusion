@@ -9,6 +9,32 @@ source "/opt/ros/${ROS_DISTRO}/setup.bash"
 source /app/venv/bin/activate
 set -u
 
+wait_for_first_message() {
+  local topic="$1"
+  local max_attempts="${2:-120}"
+  local timeout_seconds="${3:-10}"
+  local sleep_seconds="${4:-2}"
+  local attempt=1
+
+  while (( attempt <= max_attempts )); do
+    if timeout "${timeout_seconds}" ros2 topic echo "${topic}" --once >/dev/null 2>&1; then
+      echo "Received first message on ${topic}"
+      return 0
+    fi
+
+    echo "Waiting for first message on ${topic} (${attempt}/${max_attempts})"
+    attempt=$((attempt + 1))
+    sleep "${sleep_seconds}"
+  done
+
+  echo "Timed out waiting for first message on ${topic}" >&2
+  return 1
+}
+
+wait_for_first_message "${YOLO_LIDAR_TOPIC:-/velodyne_points}"
+wait_for_first_message "${YOLO_CAMERA_INFO_TOPIC:-/zed/zed_node/rgb/color/rect/camera_info}"
+wait_for_first_message "${YOLO_IMAGE_TOPIC:-/zed/zed_node/rgb/color/rect/image}"
+
 cd /app/YOLO-LiDAR-Fusion/Code
 
 cmd=(python main.py ros --fusion-config-path "${FUSION_CONFIG_PATH}")
