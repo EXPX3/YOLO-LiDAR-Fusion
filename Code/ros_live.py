@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -134,6 +137,50 @@ def load_defaults_from_fusion_config(fusion_config_path: str) -> dict:
     return data.get('vlp16zed2ifusion', {}).get('ros__parameters', {})
 
 
+def detect_display_geometry(default_width: int, default_height: int) -> tuple[int, int, int, int]:
+    default_x = int(os.environ.get('YOLO_WINDOW_X', '0'))
+    default_y = int(os.environ.get('YOLO_WINDOW_Y', '0'))
+
+    try:
+        result = subprocess.run(
+            ['xrandr', '--current'],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+    except Exception:
+        return default_x, default_y, default_width, default_height
+
+    geometry_pattern = re.compile(r'(?P<w>\d+)x(?P<h>\d+)\+(?P<x>\d+)\+(?P<y>\d+)')
+    primary_geometry = None
+    connected_geometry = None
+
+    for line in result.stdout.splitlines():
+        if ' connected' not in line:
+            continue
+
+        match = geometry_pattern.search(line)
+        if not match:
+            continue
+
+        geometry = (
+            int(match.group('x')),
+            int(match.group('y')),
+            int(match.group('w')),
+            int(match.group('h')),
+        )
+
+        if ' primary ' in line:
+            primary_geometry = geometry
+            break
+
+        if connected_geometry is None:
+            connected_geometry = geometry
+
+    return primary_geometry or connected_geometry or (default_x, default_y, default_width, default_height)
+
+
 class LiveMaskedProjectionNode(Node):
     def __init__(
         self,
@@ -157,6 +204,16 @@ class LiveMaskedProjectionNode(Node):
         self.erosion_factor = erosion_factor
         self.depth_factor = depth_factor
         self.display = display
+        self.window_name = 'YOLO-LiDAR-Fusion Live'
+        self.window_initialized = False
+        self.window_fullscreen = os.environ.get('YOLO_WINDOW_FULLSCREEN', '1') != '0'
+        self.window_width = int(os.environ.get('YOLO_WINDOW_WIDTH', '1920'))
+        self.window_height = int(os.environ.get('YOLO_WINDOW_HEIGHT', '1080'))
+        self.window_x, self.window_y, self.window_width, self.window_height = detect_display_geometry(
+            self.window_width,
+            self.window_height,
+        )
+        self.warned_about_window = False
         self.bridge = CvBridge()
         self.latest_cloud: Optional[PointCloud2] = None
         self.camera_matrix = load_camera_matrix_from_yaml(camera_calibration_file)
@@ -211,6 +268,13 @@ class LiveMaskedProjectionNode(Node):
         )
         if self.output_topic:
             self.get_logger().info(f'Publishing masked projected image to {self.output_topic}')
+        if self.display:
+            mode = (
+                f'fill-primary-display {self.window_width}x{self.window_height}+{self.window_x}+{self.window_y}'
+                if self.window_fullscreen
+                else f'{self.window_width}x{self.window_height}+{self.window_x}+{self.window_y}'
+            )
+            self.get_logger().info(f'Opening live display window in {mode} mode')
 
     def camera_info_callback(self, msg: CameraInfo) -> None:
         camera_matrix = np.asarray(msg.k, dtype=np.float64).reshape(3, 3)
@@ -314,9 +378,50 @@ class LiveMaskedProjectionNode(Node):
             self.image_pub.publish(output_msg)
 
         if self.display:
-            cv2.imshow('YOLO-LiDAR-Fusion Live', image)
+            self.ensure_display_window()
+            cv2.imshow(self.window_name, self.prepare_image_for_display(image))
             if cv2.waitKey(1) & 0xFF == 27:
+                cv2.destroyWindow(self.window_name)
                 rclpy.shutdown()
+
+    def ensure_display_window(self) -> None:
+        if self.window_initialized:
+            return
+
+        window_flags = cv2.WINDOW_NORMAL
+        if hasattr(cv2, 'WINDOW_FREERATIO'):
+            window_flags |= cv2.WINDOW_FREERATIO
+
+        cv2.namedWindow(self.window_name, window_flags)
+        try:
+            if hasattr(cv2, 'WND_PROP_ASPECT_RATIO') and hasattr(cv2, 'WINDOW_FREERATIO'):
+                cv2.setWindowProperty(self.window_name, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_FREERATIO)
+            cv2.moveWindow(self.window_name, self.window_x, self.window_y)
+            cv2.resizeWindow(self.window_name, self.window_width, self.window_height)
+        except cv2.error as exc:
+            if not self.warned_about_window:
+                self.get_logger().warn(f'Could not apply requested window mode: {exc}')
+                self.warned_about_window = True
+        self.window_initialized = True
+
+    def prepare_image_for_display(self, image: np.ndarray) -> np.ndarray:
+        image_height, image_width = image.shape[:2]
+        if image_width <= 0 or image_height <= 0:
+            return image
+
+        target_width = self.window_width
+        target_height = self.window_height
+        if target_width <= 0 or target_height <= 0:
+            return image
+
+        scale = max(target_width / image_width, target_height / image_height)
+        resized_width = max(1, int(round(image_width * scale)))
+        resized_height = max(1, int(round(image_height * scale)))
+        resized_image = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
+
+        x_offset = max(0, (resized_width - target_width) // 2)
+        y_offset = max(0, (resized_height - target_height) // 2)
+        return resized_image[y_offset:y_offset + target_height, x_offset:x_offset + target_width]
 
 
 def run_live_ros_inference(
