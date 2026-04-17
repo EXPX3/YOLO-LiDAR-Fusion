@@ -123,9 +123,10 @@ The repository now supports a live ROS path through `python main.py ros`. In thi
 - YOLO runs on the camera image topic
 - the LiDAR point cloud is read from a live `PointCloud2` topic
 - the camera intrinsics come from the live `CameraInfo` topic by default
-- the default image topic, camera info topic, LiDAR topic, and extrinsic defaults are loaded from:
+- the default image topic, camera info topic, LiDAR topic, and extrinsic defaults are loaded from the sibling
+  `ws_vlp16zed2ifusion` workspace config:
 
-  `/media/gvb/ssd24ubuntu/robotspace2/3DRecon/ws_vlp16zed2ifusion/src/vlp16zed2ifusion/config/fusion_overlay_params.yaml`
+  `../ws_vlp16zed2ifusion/src/vlp16zed2ifusion/config/fusion_overlay_params.yaml`
 
 - only the LiDAR points that survive the segmentation-mask filtering are projected back onto the image
 
@@ -164,9 +165,11 @@ The default live topics are:
       python main.py ros --image-topic /zed/zed_node/rgb/color/rect/image --camera-info-topic /zed/zed_node/rgb/color/rect/camera_info --lidar-topic /velodyne_points --output-topic /yolo_lidar_fusion/masked_projected_image
 
 ## 6. Live ROS With ws_vlp16zed2ifusion
-If the ZED and Velodyne topics are already being published from the other workspace at:
+If the ZED and Velodyne topics are already being published from the sibling workspace in the
+`segmented_mask_depth` parent repo, either through:
 
-`/media/gvb/ssd24ubuntu/robotspace2/3DRecon/ws_vlp16zed2ifusion/docker/run_functional.sh`
+- `../ws_vlp16zed2ifusion/docker/run.sh`, or
+- `../docker-compose.yml`
 
 then this repository can subscribe to those topics from a second container or terminal session as long as:
 
@@ -181,11 +184,9 @@ Recommended launch order:
 2. Wait until `/zed/zed_node/rgb/color/rect/image`, `/zed/zed_node/rgb/color/rect/camera_info`, and `/velodyne_points` are available.
 3. Start the YOLO-LiDAR-Fusion container or shell and run `python main.py ros`.
 
-Creating a Docker Compose file at:
-
-`/media/gvb/ssd24ubuntu/robotspace2/3DRecon`
-
-does make sense if both workspaces are meant to run together regularly. It gives you:
+Creating a Docker Compose file at the parent repo level does make sense if both workspaces are
+meant to run together regularly.
+It gives you:
 
 - one shared place to define `--network host`, GPU access, X11 mounts, and environment variables
 - repeatable startup for both containers
@@ -193,29 +194,33 @@ does make sense if both workspaces are meant to run together regularly. It gives
 
 Compose is especially useful here because the `ws_vlp16zed2ifusion` container acts as the sensor publisher and this repository acts as the consumer.
 
-In the provided Compose setup, the publisher uses the existing prebuilt image tag:
+In the provided Compose setup, the publisher service is built from:
 
-`ros2_camera_lidar_fusion:functional`
+`ws_vlp16zed2ifusion/docker/Dockerfile`
 
-Only the YOLO live ROS image is built from source if it is missing or if you call Compose with `--build`.
+and the YOLO live ROS image is built from:
+
+`external/YOLO-LiDAR-Fusion/docker/Dockerfile.live_ros`
 
 The repository root-level Compose file is:
 
-`/media/gvb/ssd24ubuntu/robotspace2/3DRecon/docker-compose.yml`
+`./docker-compose.yml` from the parent repo root
 
 Typical startup:
 
 ```shell
 xhost +local:root
-cd /media/gvb/ssd24ubuntu/robotspace2/3DRecon
-docker compose up --build
+PARENT_REPO_ROOT="$(cd ../.. && pwd)"
+cd "${PARENT_REPO_ROOT}"
+./start_docker_compose_stack.sh
 ```
 
 If you want to run the stack without the YOLO OpenCV display window:
 
 ```shell
-cd /media/gvb/ssd24ubuntu/robotspace2/3DRecon
-YOLO_DISPLAY=0 docker compose up --build
+PARENT_REPO_ROOT="$(cd ../.. && pwd)"
+cd "${PARENT_REPO_ROOT}"
+YOLO_DISPLAY=0 ./start_docker_compose_stack.sh
 ```
 
 ## 7. File Structure

@@ -18,9 +18,13 @@ if __name__ == "__main__":
     code_dir = Path(__file__).resolve().parent
     default_dataset_path = str((code_dir / "../KITTI_dataset").resolve())
     default_video_directory = str((code_dir / "../KITTI_raw_data").resolve())
-    default_fusion_config_path = (
-        "/media/gvb/ssd24ubuntu/robotspace2/3DRecon/ws_vlp16zed2ifusion/"
-        "src/vlp16zed2ifusion/config/fusion_overlay_params.yaml"
+    default_fusion_config_path = str(
+        Path(
+            os.environ.get(
+                "FUSION_CONFIG_PATH",
+                (code_dir / "../../ws_vlp16zed2ifusion/src/vlp16zed2ifusion/config/fusion_overlay_params.yaml").resolve(),
+            )
+        )
     )
 
     parser = argparse.ArgumentParser()
